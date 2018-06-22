@@ -2,6 +2,7 @@ package timer
 
 import (
 	"container/list"
+	"sync"
 	"time"
 
 	"github.com/satori/go.uuid"
@@ -11,26 +12,27 @@ import (
 type Node struct {
 	id      string
 	tType   TimerType
-	delay   time.Duration             // 延迟时间
-	circle  int                       // 时间轮需要转动几圈
-	handler func(args ...interface{}) //任务函数
-	args    []interface{}             //函数参数
+	delay   time.Duration          // 延迟时间
+	circle  int                    // 时间轮需要转动几圈
+	handler func(args interface{}) // 任务函数
+	args    interface{}            // 函数参数
 }
 
 //TimeWheel 时间轮
 type TimeWheel struct {
-	slots      []*list.List //时间轮的槽
+	slots      []*list.List // 时间轮的槽
 	currentPos int          // 当前指针指向哪一个槽
 	slotNum    int          // 槽数量
 }
 
 //Timer 定时器
 type Timer struct {
+	mutex  sync.Mutex
 	tick   time.Duration //最小粒度
 	ticker *time.Ticker
 
 	timeWheel *TimeWheel
-	timerMap  map[string]int //存储定时器id对应的槽位置
+	timerMap  sync.Map //存储定时器id对应的槽位置
 	stop      chan bool
 }
 
@@ -58,7 +60,7 @@ func NewTimer(tick time.Duration, num int) *Timer {
 
 	t.timeWheel.slots = make([]*list.List, t.timeWheel.slotNum)
 
-	t.timerMap = make(map[string]int)
+	t.timerMap = sync.Map{}
 
 	t.timeWheel.currentPos = 0
 
@@ -68,11 +70,16 @@ func NewTimer(tick time.Duration, num int) *Timer {
 		t.timeWheel.slots[i] = list.New()
 	}
 
+	go t.run()
+
 	return t
 }
 
 //Register 注册一个定时器，返回timerID
-func (t *Timer) Register(tType TimerType, delay time.Duration, handler func(args ...interface{}), args ...interface{}) string {
+func (t *Timer) Register(tType TimerType, delay time.Duration, handler func(args interface{}), args interface{}) string {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+
 	pos, circle := t.getPositionAndCircle(delay)
 
 	node := new(Node)
@@ -83,10 +90,16 @@ func (t *Timer) Register(tType TimerType, delay time.Duration, handler func(args
 	node.args = args
 	node.delay = delay
 
-	node.id = uuid.NewV4().String()
+	uid, err := uuid.NewV4()
+	if err != nil {
+		return ""
+	}
+
+	node.id = uid.String()
 
 	t.timeWheel.slots[pos].PushBack(node)
-	t.timerMap[node.id] = pos
+
+	t.timerMap.Store(node.id, pos)
 
 	return node.id
 }
@@ -97,25 +110,33 @@ func (t *Timer) registerV1(node *Node) {
 	node.circle = circle
 
 	t.timeWheel.slots[pos].PushBack(node)
-	t.timerMap[node.id] = pos
+
+	t.timerMap.Store(node.id, pos)
 }
 
 //Remove 删除指定定时器
 func (t *Timer) Remove(timerID string) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+
 	if timerID == "" {
 		return
 	}
-	pos, ok := t.timerMap[timerID]
+	//pos, ok := t.timerMap[timerID]
+
+	pos, ok := t.timerMap.Load(timerID)
 	if !ok {
 		return
 	}
 
-	l := t.timeWheel.slots[pos]
+	l := t.timeWheel.slots[pos.(int)]
 	for e := l.Front(); e != nil; {
 		job := e.Value.(*Node)
 		if job.id == timerID {
-			delete(t.timerMap, timerID)
+			//delete(t.timerMap, timerID)
+			t.timerMap.Delete(timerID)
 			l.Remove(e)
+			break
 		}
 		e = e.Next()
 	}
@@ -123,20 +144,26 @@ func (t *Timer) Remove(timerID string) {
 
 //Reset 重新设置定时器
 func (t *Timer) Reset(timerID string) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+
 	if timerID == "" {
 		return
 	}
 
-	pos, ok := t.timerMap[timerID]
+	//pos, ok := t.timerMap[timerID]
+	pos, ok := t.timerMap.Load(timerID)
 	if !ok {
 		return
 	}
 
-	l := t.timeWheel.slots[pos]
+	l := t.timeWheel.slots[pos.(int)]
 	for e := l.Front(); e != nil; {
 		job := e.Value.(*Node)
 		if job.id == timerID {
+			l.Remove(e)
 			t.registerV1(job)
+			break
 		}
 		e = e.Next()
 	}
@@ -161,14 +188,15 @@ func (t *Timer) step() {
 			e = e.Next()
 			continue
 		}
-		go job.handler(job.args...)
+		go job.handler(job.args)
 
 		next := e.Next()
 		if job.tType == Repetition {
 			//循环的重新注册
 			t.registerV1(job)
 		} else {
-			delete(t.timerMap, job.id)
+			//delete(t.timerMap, job.id)
+			t.timerMap.Delete(job.id)
 		}
 
 		l.Remove(e)
@@ -184,16 +212,20 @@ func (t *Timer) step() {
 
 //Stop 停止
 func (t *Timer) Stop() {
-	t.ticker.Stop()
+	t.stop <- true
 }
 
 //Run 主循环
-func (t *Timer) Run() {
+func (t *Timer) run() {
 	t.ticker = time.NewTicker(t.tick)
 	for {
 		select {
 		case <-t.ticker.C:
 			t.step()
+		case stop := <-t.stop:
+			if stop {
+				t.ticker.Stop()
+			}
 		}
 	}
 }
