@@ -2,6 +2,7 @@ package timer
 
 import (
 	"container/list"
+	"errors"
 	"sync"
 	"time"
 
@@ -115,18 +116,17 @@ func (t *Timer) registerV1(node *Node) {
 }
 
 //Remove 删除指定定时器
-func (t *Timer) Remove(timerID string) {
+func (t *Timer) Remove(timerID string) error {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
 
 	if timerID == "" {
-		return
+		return errors.New("id is nil")
 	}
-	//pos, ok := t.timerMap[timerID]
 
 	pos, ok := t.timerMap.Load(timerID)
 	if !ok {
-		return
+		return errors.New("id do not exist")
 	}
 
 	l := t.timeWheel.slots[pos.(int)]
@@ -140,21 +140,21 @@ func (t *Timer) Remove(timerID string) {
 		}
 		e = e.Next()
 	}
+	return nil
 }
 
 //Reset 重新设置定时器
-func (t *Timer) Reset(timerID string) {
+func (t *Timer) Reset(timerID string) error {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
 
 	if timerID == "" {
-		return
+		return errors.New("id is nil")
 	}
 
-	//pos, ok := t.timerMap[timerID]
 	pos, ok := t.timerMap.Load(timerID)
 	if !ok {
-		return
+		return errors.New("id do not exist")
 	}
 
 	l := t.timeWheel.slots[pos.(int)]
@@ -167,6 +167,7 @@ func (t *Timer) Reset(timerID string) {
 		}
 		e = e.Next()
 	}
+	return nil
 }
 
 // 获取定时器在槽中的位置, 时间轮需要转动的圈数
