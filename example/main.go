@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"time"
-	"timer"
+	"github.com/Jackson-soft/timer"
 )
 
 func main() {
