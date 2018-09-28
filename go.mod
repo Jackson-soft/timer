@@ -1,3 +1,6 @@
 module github.com/Jackson-soft/timer
 
-require github.com/satori/go.uuid v1.2.1-0.20180103174451-36e9d2ebbde5
+require (
+	github.com/gofrs/uuid v3.1.0+incompatible
+	github.com/pkg/errors v0.8.0
+)

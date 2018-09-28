@@ -2,11 +2,11 @@ package timer
 
 import (
 	"container/list"
-	"errors"
 	"sync"
 	"time"
 
-	"github.com/satori/go.uuid"
+	"github.com/pkg/errors"
+	"github.com/gofrs/uuid"
 )
 
 //Node 时间轮槽的链表节点
@@ -43,12 +43,18 @@ type TimerType uint8
 const (
 	Single     TimerType = 1 //单次
 	Repetition TimerType = 2 //循环
+
+	defaultTick = time.Second
+	defaultNum  = 5
 )
 
 //NewTimer 创建一个指定槽数量和最小粒度的定时器
 func NewTimer(tick time.Duration, num int) *Timer {
-	if tick <= 0 || num <= 0 {
-		return nil
+	if tick <= 0 {
+		tick = defaultTick
+	}
+	if num <= 0 {
+		num = defaultNum
 	}
 
 	t := new(Timer)
@@ -77,9 +83,14 @@ func NewTimer(tick time.Duration, num int) *Timer {
 }
 
 //Register 注册一个定时器，返回timerID
-func (t *Timer) Register(tType TimerType, delay time.Duration, handler func(args interface{}), args interface{}) string {
+func (t *Timer) Register(tType TimerType, delay time.Duration, handler func(args interface{}), args interface{}) (string, error) {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
+
+	uid, err := uuid.NewV4()
+	if err != nil {
+		return "", err
+	}
 
 	pos, circle := t.getPositionAndCircle(delay)
 
@@ -91,18 +102,13 @@ func (t *Timer) Register(tType TimerType, delay time.Duration, handler func(args
 	node.args = args
 	node.delay = delay
 
-	uid, err := uuid.NewV4()
-	if err != nil {
-		return ""
-	}
-
 	node.id = uid.String()
 
 	t.timeWheel.slots[pos].PushBack(node)
 
 	t.timerMap.Store(node.id, pos)
 
-	return node.id
+	return node.id, nil
 }
 
 func (t *Timer) registerV1(node *Node) {
@@ -133,7 +139,6 @@ func (t *Timer) Remove(timerID string) error {
 	for e := l.Front(); e != nil; {
 		job := e.Value.(*Node)
 		if job.id == timerID {
-			//delete(t.timerMap, timerID)
 			t.timerMap.Delete(timerID)
 			l.Remove(e)
 			break
@@ -196,7 +201,6 @@ func (t *Timer) step() {
 			//循环的重新注册
 			t.registerV1(job)
 		} else {
-			//delete(t.timerMap, job.id)
 			t.timerMap.Delete(job.id)
 		}
 
